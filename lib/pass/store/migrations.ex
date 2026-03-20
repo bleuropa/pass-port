@@ -1,13 +1,63 @@
 defmodule Pass.Store.Migrations do
   @moduledoc """
-  SQLite schema setup for the Pass solution store.
+  Versioned SQLite schema migrations for the Pass solution store.
+
+  Uses a `schema_version` table to track which migrations have been applied.
+  Each version is run only once, and new databases get all migrations in order.
   """
 
+  @current_version 2
+
   @doc """
-  Runs migrations on the given Exqlite connection, creating tables and indexes if they don't exist.
+  Runs all pending migrations on the given Exqlite connection.
+
+  Checks the current schema version and applies any newer migrations.
   """
   @spec run(Exqlite.Sqlite3.db()) :: :ok
   def run(conn) do
+    ensure_version_table(conn)
+    current = get_version(conn)
+
+    if current < 1, do: migrate_v1(conn)
+    if current < 2, do: migrate_v2(conn)
+
+    set_version(conn, @current_version)
+    :ok
+  end
+
+  defp ensure_version_table(conn) do
+    :ok =
+      Exqlite.Sqlite3.execute(conn, """
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY
+      )
+      """)
+  end
+
+  defp get_version(conn) do
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT MAX(version) FROM schema_version")
+
+    try do
+      case Exqlite.Sqlite3.step(conn, stmt) do
+        {:row, [nil]} -> 0
+        {:row, [v]} -> v
+        :done -> 0
+      end
+    after
+      Exqlite.Sqlite3.release(conn, stmt)
+    end
+  end
+
+  defp set_version(conn, version) do
+    :ok =
+      Exqlite.Sqlite3.execute(
+        conn,
+        "INSERT OR REPLACE INTO schema_version (version) VALUES (#{version})"
+      )
+  end
+
+  # v1: Original schema — solutions table + basic indexes
+  defp migrate_v1(conn) do
     :ok =
       Exqlite.Sqlite3.execute(conn, """
       CREATE TABLE IF NOT EXISTS solutions (
@@ -45,6 +95,61 @@ defmodule Pass.Store.Migrations do
       Exqlite.Sqlite3.execute(
         conn,
         "CREATE INDEX IF NOT EXISTS idx_solutions_trust_score ON solutions(trust_score)"
+      )
+  end
+
+  # v2: Fingerprint columns + FTS5 + facet indexes
+  defp migrate_v2(conn) do
+    columns = [
+      "domain TEXT",
+      "target TEXT",
+      "ecosystem TEXT",
+      "version_constraints TEXT",
+      "error_class TEXT",
+      "constraints TEXT",
+      "goal TEXT",
+      "symptoms TEXT",
+      "terms TEXT"
+    ]
+
+    for col <- columns do
+      :ok = Exqlite.Sqlite3.execute(conn, "ALTER TABLE solutions ADD COLUMN #{col}")
+    end
+
+    :ok =
+      Exqlite.Sqlite3.execute(conn, """
+      CREATE VIRTUAL TABLE IF NOT EXISTS solutions_fts USING fts5(
+        goal,
+        symptoms,
+        problem_description,
+        tags,
+        content='',
+        tokenize='porter unicode61'
+      )
+      """)
+
+    :ok =
+      Exqlite.Sqlite3.execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS idx_solutions_domain ON solutions(domain)"
+      )
+
+    :ok =
+      Exqlite.Sqlite3.execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS idx_solutions_target ON solutions(target)"
+      )
+
+    :ok =
+      Exqlite.Sqlite3.execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS idx_solutions_error_class ON solutions(error_class)"
+      )
+
+    :ok =
+      Exqlite.Sqlite3.execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS idx_solutions_ecosystem ON solutions(ecosystem)"
       )
   end
 end

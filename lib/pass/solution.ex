@@ -6,6 +6,8 @@ defmodule Pass.Solution do
   hash of the normalized problem description, language, and framework.
   """
 
+  alias Pass.Fingerprint
+
   @enforce_keys [
     :id,
     :problem_signature,
@@ -24,6 +26,7 @@ defmodule Pass.Solution do
     :runtime,
     :agent_id,
     :signature,
+    :fingerprint,
     :inserted_at,
     :updated_at,
     tags: [],
@@ -49,6 +52,7 @@ defmodule Pass.Solution do
           trust_score: float(),
           agent_id: String.t(),
           signature: String.t() | nil,
+          fingerprint: Pass.Fingerprint.t() | nil,
           sharing: :local | :anonymous | :attributed,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
@@ -96,11 +100,15 @@ defmodule Pass.Solution do
       Map.get(attrs, :problem_signature) || Map.get(attrs, "problem_signature") ||
         compute_signature(extract_signature_input(attrs))
 
+    fingerprint =
+      Map.get(attrs, :fingerprint) || maybe_build_fingerprint(attrs)
+
     struct!(
       __MODULE__,
       Map.merge(attrs, %{
         id: Map.get(attrs, :id) || Map.get(attrs, "id") || generate_uuid(),
         problem_signature: problem_sig,
+        fingerprint: fingerprint,
         inserted_at: Map.get(attrs, :inserted_at) || now,
         updated_at: Map.get(attrs, :updated_at) || now
       })
@@ -167,6 +175,7 @@ defmodule Pass.Solution do
       "agent_id" => solution.agent_id,
       "signature" => solution.signature,
       "sharing" => Atom.to_string(solution.sharing),
+      "fingerprint" => encode_fingerprint(solution.fingerprint),
       "inserted_at" => DateTime.to_iso8601(solution.inserted_at),
       "updated_at" => DateTime.to_iso8601(solution.updated_at)
     }
@@ -192,6 +201,7 @@ defmodule Pass.Solution do
       trust_score: map["trust_score"] || 0.0,
       agent_id: map["agent_id"],
       signature: map["signature"],
+      fingerprint: decode_fingerprint(map["fingerprint"]),
       sharing: parse_sharing(map["sharing"]),
       inserted_at: parse_datetime!(map["inserted_at"]),
       updated_at: parse_datetime!(map["updated_at"])
@@ -254,4 +264,43 @@ defmodule Pass.Solution do
   end
 
   defp parse_datetime!(%DateTime{} = dt), do: dt
+
+  defp maybe_build_fingerprint(attrs) do
+    has_fingerprint_fields =
+      Enum.any?(
+        [:domain, :target, :ecosystem, :error_class, :goal, :symptoms],
+        &(Map.has_key?(attrs, &1) or Map.has_key?(attrs, Atom.to_string(&1)))
+      )
+
+    has_legacy_fields =
+      Map.has_key?(attrs, :problem_description) or Map.has_key?(attrs, "problem_description")
+
+    cond do
+      has_fingerprint_fields ->
+        Fingerprint.Decomposer.decompose(attrs)
+
+      has_legacy_fields ->
+        Fingerprint.Decomposer.decompose_from_legacy(attrs)
+
+      true ->
+        nil
+    end
+  end
+
+  defp encode_fingerprint(nil), do: nil
+
+  defp encode_fingerprint(%Fingerprint{} = fp) do
+    fp |> Fingerprint.to_map() |> Jason.encode!()
+  end
+
+  defp decode_fingerprint(nil), do: nil
+
+  defp decode_fingerprint(val) when is_binary(val) do
+    case Jason.decode(val) do
+      {:ok, map} -> Fingerprint.from_map(map)
+      _ -> nil
+    end
+  end
+
+  defp decode_fingerprint(%{} = map), do: Fingerprint.from_map(map)
 end

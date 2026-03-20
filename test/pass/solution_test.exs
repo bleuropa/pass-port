@@ -160,5 +160,68 @@ defmodule Pass.SolutionTest do
       assert restored.tags == original.tags
       assert restored.verification == original.verification
     end
+
+    test "round-trips fingerprint through serialization" do
+      fp =
+        Pass.Fingerprint.new(%{
+          domain: "deployment",
+          target: "fly.io",
+          goal: "deploy phoenix app"
+        })
+
+      original = Solution.new(Map.put(@valid_attrs, :fingerprint, fp))
+      assert original.fingerprint != nil
+      assert original.fingerprint.domain == "deployment"
+
+      map = Solution.to_map(original)
+      assert is_binary(map["fingerprint"])
+
+      restored = Solution.from_map(map)
+      assert restored.fingerprint != nil
+      assert restored.fingerprint.domain == "deployment"
+      assert restored.fingerprint.target == "fly.io"
+    end
+
+    test "from_map handles nil fingerprint" do
+      original = Solution.new(@valid_attrs)
+      map = Solution.to_map(original)
+      # Remove fingerprint from the map to simulate nil
+      map = Map.put(map, "fingerprint", nil)
+      restored = Solution.from_map(map)
+      assert restored.fingerprint == nil
+    end
+  end
+
+  describe "fingerprint integration" do
+    test "new/1 auto-creates fingerprint from legacy attrs via decomposer" do
+      solution = Solution.new(@valid_attrs)
+      assert solution.fingerprint != nil
+      assert "elixir" in solution.fingerprint.ecosystem
+    end
+
+    test "new/1 uses provided fingerprint struct directly" do
+      fp = Pass.Fingerprint.new(%{domain: "testing", target: "exunit"})
+      attrs = Map.put(@valid_attrs, :fingerprint, fp)
+      solution = Solution.new(attrs)
+      assert solution.fingerprint.domain == "testing"
+      assert solution.fingerprint.target == "exunit"
+    end
+
+    test "new/1 with explicit fingerprint preserves all facets" do
+      fp =
+        Pass.Fingerprint.new(%{
+          domain: "deployment",
+          target: "fly.io",
+          ecosystem: ["elixir", "phoenix"],
+          error_class: "build_failure",
+          goal: "deploy phoenix app"
+        })
+
+      solution = Solution.new(Map.put(@valid_attrs, :fingerprint, fp))
+      assert solution.fingerprint.domain == "deployment"
+      assert solution.fingerprint.target == "fly.io"
+      assert solution.fingerprint.error_class == "build_failure"
+      assert "elixir" in solution.fingerprint.ecosystem
+    end
   end
 end

@@ -20,7 +20,12 @@ defmodule Pass.Actions.PublishSolutionTest do
     {:ok, pid} = Store.start_link(db_path: db_path, name: store)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
+
       File.rm(db_path)
       File.rm(identity_path)
     end)
@@ -73,5 +78,51 @@ defmodule Pass.Actions.PublishSolutionTest do
     }
 
     assert {:error, :not_found} = PublishSolution.run(params, %{})
+  end
+
+  test "publishes with fingerprint attrs and stores them", %{
+    store: store,
+    identity_path: identity_path
+  } do
+    params = %{
+      problem_description: "Deploy fails on fly.io",
+      solution_content: "# fix dockerfile",
+      language: "elixir",
+      framework: "phoenix",
+      domain: "deployment",
+      target: "fly.io",
+      ecosystem: ["elixir", "phoenix"],
+      error_class: "build_failure",
+      goal: "deploy phoenix app to fly.io",
+      symptoms: ["exit code 1 during docker build"],
+      identity_path: identity_path,
+      store: store
+    }
+
+    assert {:ok, result} = PublishSolution.run(params, %{})
+    assert result.fingerprint != nil
+    assert result.fingerprint.domain == "deployment"
+    assert result.fingerprint.target == "fly.io"
+    assert result.fingerprint.error_class == "build_failure"
+
+    {:ok, [{_sol, fp_map}]} = Store.search(%{domain: "deployment"}, [], store)
+    assert fp_map["target"] == "fly.io"
+  end
+
+  test "publishes legacy-style attrs and auto-generates fingerprint", %{
+    store: store,
+    identity_path: identity_path
+  } do
+    params = %{
+      problem_description: "GenServer crashes on timeout",
+      solution_content: "# fix timeout",
+      language: "elixir",
+      identity_path: identity_path,
+      store: store
+    }
+
+    assert {:ok, result} = PublishSolution.run(params, %{})
+    assert result.fingerprint != nil
+    assert "elixir" in result.fingerprint.ecosystem
   end
 end
