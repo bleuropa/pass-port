@@ -12,7 +12,12 @@ defmodule Pass.StoreTest do
     {:ok, pid} = Store.start_link(db_path: db_path, name: store)
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
+
       File.rm(db_path)
     end)
 

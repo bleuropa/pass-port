@@ -29,9 +29,11 @@ defmodule Pass.Actions.PublishSolution do
       constraints: [type: {:list, :string}, doc: "Hard environment constraints"],
       goal: [type: :string, doc: "Goal description for fingerprint matching"],
       symptoms: [type: {:list, :string}, doc: "Observable symptoms"],
+      sharing: [type: :string, doc: "Sharing level: local, anonymous, or attributed"],
       store: [type: :atom, doc: "Store GenServer name"]
     ]
 
+  alias Pass.Config
   alias Pass.Fingerprint.Decomposer
   alias Pass.Identity
   alias Pass.Network
@@ -48,6 +50,7 @@ defmodule Pass.Actions.PublishSolution do
       agent_id = Identity.agent_id(keys.public_key)
 
       verification = normalize_verification(Map.get(params, :verification, %{}))
+      sharing = resolve_sharing(params)
 
       fingerprint = build_fingerprint(params)
 
@@ -61,10 +64,12 @@ defmodule Pass.Actions.PublishSolution do
           tags: Map.get(params, :tags, []),
           verification: verification,
           agent_id: agent_id,
+          sharing: sharing,
           fingerprint: fingerprint
         })
 
-      trust_score = Trust.score(solution)
+      reputation = Pass.Reputation.score(agent_id, store)
+      trust_score = Trust.score(solution, reputation)
       sig_data = solution.id <> solution.solution_content
       signature = Identity.sign(sig_data, keys.secret_key) |> Base.encode64()
 
@@ -84,6 +89,27 @@ defmodule Pass.Actions.PublishSolution do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  defp resolve_sharing(params) do
+    case Map.get(params, :sharing) do
+      "local" -> :local
+      "anonymous" -> :anonymous
+      "attributed" -> :attributed
+      :local -> :local
+      :anonymous -> :anonymous
+      :attributed -> :attributed
+      nil -> config_default_sharing()
+      _ -> config_default_sharing()
+    end
+  end
+
+  defp config_default_sharing do
+    case Config.get("default_sharing") do
+      "local" -> :local
+      "anonymous" -> :anonymous
+      _ -> :attributed
     end
   end
 

@@ -233,12 +233,15 @@ defmodule Pass.CLI do
     :ok
   end
 
-  defp parse_config_value("auto_connect", "true"), do: true
-  defp parse_config_value("auto_connect", "false"), do: false
+  defp parse_config_value("auto_connect", val) when val in ["true", "1", "yes"], do: true
+  defp parse_config_value("auto_connect", _val), do: false
 
   defp parse_config_value("min_trust_from_network", val) do
-    {float, _} = Float.parse(val)
-    float
+    case Float.parse(val) do
+      {float, _} when float >= 0.0 and float <= 1.0 -> float
+      {float, _} -> min(max(float, 0.0), 1.0)
+      :error -> 0.3
+    end
   end
 
   defp parse_config_value("subscribe_languages", val) do

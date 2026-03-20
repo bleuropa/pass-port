@@ -42,20 +42,21 @@ defmodule Pass.Network.Client do
   @impl Slipstream
   def init(opts) do
     agent_id = Keyword.fetch!(opts, :agent_id)
+    identity = Keyword.get(opts, :identity)
 
     socket =
       new_socket()
       |> assign(:agent_id, agent_id)
       |> assign(:status, :disconnected)
       |> assign(:channels, [])
-      |> assign(:identity, Keyword.get(opts, :identity))
+      |> assign(:identity, identity)
 
     url = Keyword.get(opts, :url) || Application.get_env(:pass, :relay_url)
 
     if Keyword.get(opts, :test_mode?, false) do
       {:ok, assign(socket, :url, url)}
     else
-      uri = build_uri(url, agent_id)
+      uri = build_uri(url, agent_id, identity)
       {:ok, socket |> assign(:url, url) |> connect!(uri: uri)}
     end
   end
@@ -174,9 +175,28 @@ defmodule Pass.Network.Client do
 
   # Private
 
-  defp build_uri(url, agent_id) do
+  defp build_uri(url, agent_id, identity) do
+    challenge = Base.encode64(:crypto.strong_rand_bytes(32))
+
+    params = %{"agent_id" => agent_id, "challenge" => challenge}
+
+    params =
+      case identity do
+        %{public_key: pk, secret_key: sk} ->
+          sig = Ed25519.signature(challenge, sk) |> Base.encode64()
+
+          Map.merge(params, %{
+            "public_key" => Base.encode64(pk),
+            "challenge_response" => sig
+          })
+
+        _ ->
+          params
+      end
+
+    query = URI.encode_query(params)
     separator = if String.contains?(url, "?"), do: "&", else: "?"
-    "#{url}#{separator}agent_id=#{URI.encode_www_form(agent_id)}"
+    "#{url}#{separator}#{query}"
   end
 
   defp notify_listeners(message) do
