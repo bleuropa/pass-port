@@ -77,9 +77,16 @@ defmodule Pass.Actions.QuerySolutions do
   end
 
   defp run_legacy_query(params, store) do
+    run_legacy_query_with_fts_fallback(params, store)
+  end
+
+  defp run_legacy_query_with_fts_fallback(params, store) do
     filters = build_filters(params)
 
     case Pass.Store.query(filters, store) do
+      {:ok, []} ->
+        maybe_fts_fallback(params, store)
+
       {:ok, solutions} ->
         results = Enum.map(solutions, &Map.from_struct/1)
         {:ok, %{solutions: results, count: length(results)}}
@@ -89,18 +96,39 @@ defmodule Pass.Actions.QuerySolutions do
     end
   end
 
+  defp maybe_fts_fallback(params, store) do
+    problem = Map.get(params, :problem)
+
+    if problem do
+      case Pass.Store.fts_search(problem, [limit: 10], store) do
+        {:ok, solutions} ->
+          results = Enum.map(solutions, &Map.from_struct/1)
+          {:ok, %{solutions: results, count: length(results)}}
+
+        {:error, _} ->
+          {:ok, %{solutions: [], count: 0}}
+      end
+    else
+      {:ok, %{solutions: [], count: 0}}
+    end
+  end
+
   defp build_filters(params) do
     filters = []
 
     filters =
       if problem = Map.get(params, :problem) do
-        sig =
-          Solution.compute_signature(%{
-            description: problem,
-            language: Map.get(params, :language, "")
-          })
+        sig_attrs = %{description: problem}
 
-        [{:problem_signature, sig} | filters]
+        sig_attrs =
+          if l = Map.get(params, :language), do: Map.put(sig_attrs, :language, l), else: sig_attrs
+
+        sig_attrs =
+          if f = Map.get(params, :framework),
+            do: Map.put(sig_attrs, :framework, f),
+            else: sig_attrs
+
+        [{:problem_signature, Solution.compute_signature(sig_attrs)} | filters]
       else
         filters
       end

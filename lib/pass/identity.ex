@@ -60,7 +60,10 @@ defmodule Pass.Identity do
       })
 
     path |> Path.dirname() |> File.mkdir_p!()
-    File.write(path, json)
+
+    with :ok <- File.write(path, json) do
+      File.chmod(path, 0o600)
+    end
   end
 
   @doc """
@@ -70,20 +73,29 @@ defmodule Pass.Identity do
   or `{:error, :not_found}`.
   """
   @spec load_keypair(String.t()) ::
-          {:ok, %{public_key: binary(), secret_key: binary()}} | {:error, :not_found}
+          {:ok, %{public_key: binary(), secret_key: binary()}}
+          | {:error, :not_found | :corrupt}
   def load_keypair(path) do
+    with {:ok, contents} <- read_identity_file(path),
+         {:ok, data} <- Jason.decode(contents),
+         {:ok, pk_raw} when pk_raw != "" <- decode_key(data["public_key"]),
+         {:ok, sk_raw} when sk_raw != "" <- decode_key(data["secret_key"]) do
+      {:ok, %{public_key: pk_raw, secret_key: sk_raw}}
+    else
+      {:error, :not_found} -> {:error, :not_found}
+      _ -> {:error, :corrupt}
+    end
+  end
+
+  defp decode_key(nil), do: {:error, :missing}
+  defp decode_key(val) when is_binary(val), do: Base.decode64(val)
+  defp decode_key(_), do: {:error, :invalid}
+
+  defp read_identity_file(path) do
     case File.read(path) do
-      {:ok, contents} ->
-        data = Jason.decode!(contents)
-
-        {:ok,
-         %{
-           public_key: Base.decode64!(data["public_key"]),
-           secret_key: Base.decode64!(data["secret_key"])
-         }}
-
-      {:error, :enoent} ->
-        {:error, :not_found}
+      {:ok, _} = ok -> ok
+      {:error, :enoent} -> {:error, :not_found}
+      {:error, _} -> {:error, :corrupt}
     end
   end
 

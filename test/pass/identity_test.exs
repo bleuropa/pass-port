@@ -83,6 +83,51 @@ defmodule Pass.IdentityTest do
     test "load from nonexistent path returns error" do
       assert {:error, :not_found} = Identity.load_keypair("/tmp/nonexistent_pass_identity.json")
     end
+
+    test "saved file has restricted permissions (0600)" do
+      {public_key, secret_key} = Identity.generate_keypair()
+      path = Path.join(System.tmp_dir!(), "pass_test_perms_#{:rand.uniform(1_000_000)}.json")
+
+      on_exit(fn -> File.rm(path) end)
+
+      :ok = Identity.save_keypair({public_key, secret_key}, path)
+      {:ok, stat} = File.stat(path)
+
+      assert stat.access == :read_write
+      # Verify actual mode bits are 0600 (owner read/write only)
+      {:ok, %{mode: mode}} = File.stat(path)
+      assert Bitwise.band(mode, 0o777) == 0o600
+    end
+
+    test "load from corrupt JSON returns error" do
+      path = Path.join(System.tmp_dir!(), "pass_test_corrupt_#{:rand.uniform(1_000_000)}.json")
+      on_exit(fn -> File.rm(path) end)
+
+      File.write!(path, "not valid json{{{")
+
+      assert {:error, _} = Identity.load_keypair(path)
+    end
+
+    test "load from invalid base64 returns error" do
+      path = Path.join(System.tmp_dir!(), "pass_test_bad64_#{:rand.uniform(1_000_000)}.json")
+      on_exit(fn -> File.rm(path) end)
+
+      File.write!(
+        path,
+        Jason.encode!(%{"public_key" => "!!!invalid!!!", "secret_key" => "also bad"})
+      )
+
+      assert {:error, _} = Identity.load_keypair(path)
+    end
+
+    test "load from file with missing keys returns error" do
+      path = Path.join(System.tmp_dir!(), "pass_test_missing_#{:rand.uniform(1_000_000)}.json")
+      on_exit(fn -> File.rm(path) end)
+
+      File.write!(path, Jason.encode!(%{"something" => "else"}))
+
+      assert {:error, _} = Identity.load_keypair(path)
+    end
   end
 
   describe "ensure_pass_dir/0" do
