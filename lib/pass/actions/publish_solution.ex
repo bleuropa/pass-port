@@ -34,6 +34,8 @@ defmodule Pass.Actions.PublishSolution do
 
   alias Pass.Fingerprint.Decomposer
   alias Pass.Identity
+  alias Pass.Network
+  alias Pass.Network.Handler
   alias Pass.Solution
   alias Pass.Trust
 
@@ -75,8 +77,12 @@ defmodule Pass.Actions.PublishSolution do
       result = GenServer.call(store, {:insert, solution, fingerprint})
 
       case result do
-        :ok -> {:ok, Map.from_struct(solution)}
-        {:error, reason} -> {:error, reason}
+        :ok ->
+          maybe_broadcast(solution, fingerprint)
+          {:ok, Map.from_struct(solution)}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -100,6 +106,18 @@ defmodule Pass.Actions.PublishSolution do
       Decomposer.decompose(params)
     else
       Decomposer.decompose_from_legacy(params)
+    end
+  end
+
+  defp maybe_broadcast(%Solution{sharing: :local}, _fingerprint), do: :ok
+
+  defp maybe_broadcast(%Solution{} = solution, fingerprint) do
+    if Network.connected?() do
+      anonymous = solution.sharing == :anonymous
+      envelope = Handler.wrap_for_broadcast(solution, fingerprint, anonymous: anonymous)
+      Network.publish_solution(envelope)
+    else
+      :ok
     end
   end
 

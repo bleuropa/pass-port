@@ -6,7 +6,7 @@ defmodule Pass.Store.Migrations do
   Each version is run only once, and new databases get all migrations in order.
   """
 
-  @current_version 2
+  @current_version 3
 
   @doc """
   Runs all pending migrations on the given Exqlite connection.
@@ -20,6 +20,7 @@ defmodule Pass.Store.Migrations do
 
     if current < 1, do: migrate_v1(conn)
     if current < 2, do: migrate_v2(conn)
+    if current < 3, do: migrate_v3(conn)
 
     set_version(conn, @current_version)
     :ok
@@ -97,6 +98,23 @@ defmodule Pass.Store.Migrations do
         conn,
         "CREATE INDEX IF NOT EXISTS idx_solutions_trust_score ON solutions(trust_score)"
       )
+  end
+
+  # v3: Agents table for reputation tracking
+  defp migrate_v3(conn) do
+    :ok =
+      Exqlite.Sqlite3.execute(conn, """
+      CREATE TABLE IF NOT EXISTS agents (
+        agent_id TEXT PRIMARY KEY,
+        public_key TEXT,
+        reputation REAL DEFAULT 0.5,
+        solutions_contributed INTEGER DEFAULT 0,
+        solutions_consumed INTEGER DEFAULT 0,
+        successful_consumptions INTEGER DEFAULT 0,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      )
+      """)
   end
 
   # v2: Fingerprint columns + FTS5 + facet indexes

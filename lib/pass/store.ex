@@ -131,6 +131,24 @@ defmodule Pass.Store do
     GenServer.call(server, {:fts_search, query_text, opts})
   end
 
+  @doc "Gets an agent record by agent_id."
+  @spec get_agent(String.t(), GenServer.server()) :: {:ok, map()} | {:error, :not_found}
+  def get_agent(agent_id, server \\ __MODULE__) do
+    GenServer.call(server, {:get_agent, agent_id})
+  end
+
+  @doc "Inserts or updates an agent record."
+  @spec upsert_agent(map(), GenServer.server()) :: :ok | {:error, term()}
+  def upsert_agent(agent_map, server \\ __MODULE__) do
+    GenServer.call(server, {:upsert_agent, agent_map})
+  end
+
+  @doc "Increments numeric fields on an agent record."
+  @spec update_agent_stats(String.t(), map(), GenServer.server()) :: :ok | {:error, term()}
+  def update_agent_stats(agent_id, field_increments, server \\ __MODULE__) do
+    GenServer.call(server, {:update_agent_stats, agent_id, field_increments})
+  end
+
   # Server callbacks
 
   @impl true
@@ -182,6 +200,21 @@ defmodule Pass.Store do
 
   def handle_call({:fts_search, query_text, opts}, _from, state) do
     result = do_fts_search(state.conn, query_text, opts)
+    {:reply, result, state}
+  end
+
+  def handle_call({:get_agent, agent_id}, _from, state) do
+    result = do_get_agent(state.conn, agent_id)
+    {:reply, result, state}
+  end
+
+  def handle_call({:upsert_agent, agent_map}, _from, state) do
+    result = do_upsert_agent(state.conn, agent_map)
+    {:reply, result, state}
+  end
+
+  def handle_call({:update_agent_stats, agent_id, field_increments}, _from, state) do
+    result = do_update_agent_stats(state.conn, agent_id, field_increments)
     {:reply, result, state}
   end
 
@@ -530,6 +563,77 @@ defmodule Pass.Store do
       :done -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @agent_columns ~w(agent_id public_key reputation solutions_contributed solutions_consumed successful_consumptions first_seen last_seen)
+
+  defp do_get_agent(conn, agent_id) do
+    sql = "SELECT #{Enum.join(@agent_columns, ", ")} FROM agents WHERE agent_id = ?1"
+
+    case exec_select(conn, sql, [agent_id]) do
+      {:ok, [row | _]} -> {:ok, row_to_agent(row)}
+      {:ok, []} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp do_upsert_agent(conn, agent_map) do
+    now = DateTime.to_iso8601(DateTime.utc_now())
+
+    sql = """
+    INSERT INTO agents (agent_id, public_key, reputation, solutions_contributed, solutions_consumed, successful_consumptions, first_seen, last_seen)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    ON CONFLICT(agent_id) DO UPDATE SET
+      public_key = COALESCE(excluded.public_key, agents.public_key),
+      reputation = excluded.reputation,
+      solutions_contributed = excluded.solutions_contributed,
+      solutions_consumed = excluded.solutions_consumed,
+      successful_consumptions = excluded.successful_consumptions,
+      last_seen = excluded.last_seen
+    """
+
+    values = [
+      agent_val(agent_map, :agent_id),
+      agent_val(agent_map, :public_key),
+      agent_val(agent_map, :reputation) || 0.5,
+      agent_val(agent_map, :solutions_contributed) || 0,
+      agent_val(agent_map, :solutions_consumed) || 0,
+      agent_val(agent_map, :successful_consumptions) || 0,
+      agent_val(agent_map, :first_seen) || now,
+      agent_val(agent_map, :last_seen) || now
+    ]
+
+    case exec_stmt(conn, sql, values) do
+      :done -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp agent_val(map, key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp do_update_agent_stats(conn, agent_id, field_increments) do
+    {set_parts, params, idx} =
+      Enum.reduce(field_increments, {[], [], 1}, fn {field, val}, {sets, ps, i} ->
+        {sets ++ ["#{field} = #{field} + ?#{i}"], ps ++ [val], i + 1}
+      end)
+
+    now = DateTime.to_iso8601(DateTime.utc_now())
+    set_parts = set_parts ++ ["last_seen = ?#{idx}"]
+    params = params ++ [now, agent_id]
+
+    sql =
+      "UPDATE agents SET #{Enum.join(set_parts, ", ")} WHERE agent_id = ?#{idx + 1}"
+
+    case exec_stmt(conn, sql, params) do
+      :done -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp row_to_agent(row) do
+    Enum.zip(@agent_columns, row) |> Map.new()
   end
 
   defp default_db_path do

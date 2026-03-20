@@ -7,8 +7,13 @@ defmodule Pass.CLI do
     - `pass serve --mcp` — start MCP server (stdio transport)
     - `pass serve --http` — start HTTP API server
     - `pass status` — show agent status
+    - `pass connect` — connect to relay server
+    - `pass disconnect` — disconnect from relay
+    - `pass config` — show current configuration
+    - `pass config set <key> <value>` — update a config value
   """
 
+  alias Pass.Config
   alias Pass.Identity
   alias Pass.Store.Migrations
 
@@ -16,15 +21,19 @@ defmodule Pass.CLI do
   Main entry point for CLI argument parsing and dispatch.
   """
   def main(args) do
-    case args do
-      ["init" | _rest] -> cmd_init()
-      ["serve" | rest] -> cmd_serve(rest)
-      ["status" | _rest] -> cmd_status()
-      ["help" | _rest] -> cmd_help()
-      [] -> cmd_help()
-      _ -> cmd_unknown(args)
-    end
+    dispatch(args)
   end
+
+  defp dispatch(["init" | _rest]), do: cmd_init()
+  defp dispatch(["serve" | rest]), do: cmd_serve(rest)
+  defp dispatch(["status" | _rest]), do: cmd_status()
+  defp dispatch(["connect" | rest]), do: cmd_connect(rest)
+  defp dispatch(["disconnect" | _rest]), do: cmd_disconnect()
+  defp dispatch(["config", "set", key, value | _rest]), do: cmd_config_set(key, value)
+  defp dispatch(["config" | _rest]), do: cmd_config()
+  defp dispatch(["help" | _rest]), do: cmd_help()
+  defp dispatch([]), do: cmd_help()
+  defp dispatch(args), do: cmd_unknown(args)
 
   @doc false
   def cmd_init(opts \\ []) do
@@ -98,6 +107,8 @@ defmodule Pass.CLI do
 
     case agent_info do
       {:ok, agent_id} ->
+        network_lines = network_status_lines()
+
         Owl.IO.puts([
           Owl.Data.tag("Pass Agent Status\n", :cyan),
           Owl.Data.tag("  Agent ID:    ", :cyan),
@@ -108,6 +119,7 @@ defmodule Pass.CLI do
           "\n",
           Owl.Data.tag("  Initialized: ", :cyan),
           Owl.Data.tag("yes", :green)
+          | network_lines
         ])
 
       :not_initialized ->
@@ -130,8 +142,139 @@ defmodule Pass.CLI do
       "  pass serve --mcp       Start MCP server (stdio transport)\n",
       "  pass serve --http      Start HTTP API server (default port 7493)\n",
       "  pass status            Show agent status\n",
+      "  pass connect            Connect to relay server\n",
+      "  pass connect --url URL  Connect to a specific relay\n",
+      "  pass disconnect         Disconnect from relay\n",
+      "  pass config             Show current configuration\n",
+      "  pass config set K V     Update a config value\n",
       "  pass help              Show this help message"
     ])
+  end
+
+  @doc false
+  def cmd_connect(args) do
+    {opts, _, _} =
+      OptionParser.parse(args,
+        switches: [url: :string],
+        aliases: [u: :url]
+      )
+
+    config = Config.load()
+    url = Keyword.get(opts, :url, config["relay_url"])
+
+    identity_path = Identity.default_identity_path()
+
+    case Identity.load_keypair(identity_path) do
+      {:ok, keys} ->
+        agent_id = Identity.agent_id(keys.public_key)
+        Owl.IO.puts(Owl.Data.tag("Connecting to #{url}...", :cyan))
+
+        connect_opts = [agent_id: agent_id, identity: keys, url: url]
+
+        case Pass.Network.connect(connect_opts) do
+          :ok ->
+            Owl.IO.puts(Owl.Data.tag("Connected!", :green))
+
+          {:error, reason} ->
+            Owl.IO.puts(Owl.Data.tag("Connection failed: #{inspect(reason)}", :red))
+        end
+
+      {:error, _} ->
+        Owl.IO.puts([
+          Owl.Data.tag("Agent not initialized.", :yellow),
+          "\n  Run ",
+          Owl.Data.tag("pass init", :cyan),
+          " first."
+        ])
+    end
+  end
+
+  @doc false
+  def cmd_disconnect do
+    Pass.Network.disconnect()
+    Owl.IO.puts(Owl.Data.tag("Disconnected from relay.", :yellow))
+  end
+
+  @doc false
+  def cmd_config(opts \\ []) do
+    path = Keyword.get(opts, :config_path, nil)
+    config = if path, do: Config.load(path), else: Config.load()
+
+    Owl.IO.puts(Owl.Data.tag("Pass Configuration\n", :cyan))
+
+    Enum.each(Enum.sort(config), fn {key, value} ->
+      Owl.IO.puts([
+        Owl.Data.tag("  #{key}: ", :cyan),
+        format_value(value)
+      ])
+    end)
+
+    :ok
+  end
+
+  @doc false
+  def cmd_config_set(key, value, opts \\ []) do
+    path = Keyword.get(opts, :config_path, nil)
+    parsed_value = parse_config_value(key, value)
+
+    if path do
+      Config.set(key, parsed_value, path)
+    else
+      Config.set(key, parsed_value)
+    end
+
+    Owl.IO.puts([
+      Owl.Data.tag("Set ", :green),
+      Owl.Data.tag(key, :cyan),
+      Owl.Data.tag(" = ", :green),
+      format_value(parsed_value)
+    ])
+
+    :ok
+  end
+
+  defp parse_config_value("auto_connect", "true"), do: true
+  defp parse_config_value("auto_connect", "false"), do: false
+
+  defp parse_config_value("min_trust_from_network", val) do
+    {float, _} = Float.parse(val)
+    float
+  end
+
+  defp parse_config_value("subscribe_languages", val) do
+    val |> String.split(",") |> Enum.map(&String.trim/1)
+  end
+
+  defp parse_config_value(_key, val), do: val
+
+  defp format_value(val) when is_list(val), do: inspect(val)
+  defp format_value(val) when is_boolean(val), do: to_string(val)
+  defp format_value(val) when is_float(val), do: to_string(val)
+  defp format_value(val), do: to_string(val)
+
+  defp network_status_lines do
+    net_status = Pass.Network.status()
+
+    case net_status.status do
+      :connected ->
+        channels = Enum.join(net_status.channels, ", ")
+
+        [
+          "\n",
+          Owl.Data.tag("  Network:     ", :cyan),
+          Owl.Data.tag("connected", :green),
+          "\n",
+          Owl.Data.tag("  Channels:    ", :cyan),
+          channels
+        ]
+
+      _ ->
+        [
+          "\n",
+          Owl.Data.tag("  Network:     ", :cyan),
+          Owl.Data.tag("disconnected", :yellow)
+        ]
+    end
   end
 
   defp cmd_unknown(args) do

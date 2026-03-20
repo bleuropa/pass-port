@@ -27,6 +27,25 @@ defmodule Pass.Trust do
   end
 
   @doc """
+  Computes a trust score (0.0-1.0) incorporating agent reputation.
+
+  When reputation is provided, uses adjusted weights:
+    - verification: 0.35
+    - completeness: 0.25
+    - freshness: 0.25
+    - reputation: 0.15
+  """
+  @spec score(Solution.t(), float()) :: float()
+  def score(%Solution{} = solution, reputation) when is_float(reputation) do
+    v = verification_score(solution)
+    c = completeness_score(solution)
+    f = freshness_score(solution)
+
+    (0.35 * v + 0.25 * c + 0.25 * f + 0.15 * reputation)
+    |> clamp()
+  end
+
+  @doc """
   Scores the verification map.
 
   - compiled: true = 0.4

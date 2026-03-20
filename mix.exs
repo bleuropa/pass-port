@@ -75,6 +75,9 @@ defmodule Pass.MixProject do
       # Binary packaging
       {:burrito, "~> 1.0"},
 
+      # Networking (relay WebSocket client)
+      {:slipstream, "~> 1.2"},
+
       # Dev/Test
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:mox, "~> 1.0", only: :test}
