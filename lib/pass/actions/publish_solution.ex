@@ -29,7 +29,6 @@ defmodule Pass.Actions.PublishSolution do
       constraints: [type: {:list, :string}, doc: "Hard environment constraints"],
       goal: [type: :string, doc: "Goal description for fingerprint matching"],
       symptoms: [type: {:list, :string}, doc: "Observable symptoms"],
-      identity_path: [type: :string, doc: "Path to identity file"],
       store: [type: :atom, doc: "Store GenServer name"]
     ]
 
@@ -41,7 +40,7 @@ defmodule Pass.Actions.PublishSolution do
   @impl true
   def run(params, _context) do
     identity_path = Map.get(params, :identity_path) || Identity.default_identity_path()
-    store = Map.get(params, :store) || Pass.Store
+    store = store_name(params)
 
     with {:ok, keys} <- Identity.load_keypair(identity_path) do
       agent_id = Identity.agent_id(keys.public_key)
@@ -64,16 +63,29 @@ defmodule Pass.Actions.PublishSolution do
         })
 
       trust_score = Trust.score(solution)
-      solution = %{solution | trust_score: trust_score}
-
       sig_data = solution.id <> solution.solution_content
       signature = Identity.sign(sig_data, keys.secret_key) |> Base.encode64()
-      solution = %{solution | signature: signature}
 
-      case Pass.Store.insert(solution, fingerprint, store) do
+      solution =
+        struct!(
+          Solution,
+          Map.merge(Map.from_struct(solution), %{trust_score: trust_score, signature: signature})
+        )
+
+      result = GenServer.call(store, {:insert, solution, fingerprint})
+
+      case result do
         :ok -> {:ok, Map.from_struct(solution)}
         {:error, reason} -> {:error, reason}
       end
+    end
+  end
+
+  defp store_name(params) do
+    case Map.get(params, :store) do
+      nil -> Pass.Store
+      name when is_atom(name) -> name
+      other -> other
     end
   end
 

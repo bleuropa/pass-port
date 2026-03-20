@@ -49,11 +49,12 @@ defmodule Pass.Store.Migrations do
   end
 
   defp set_version(conn, version) do
-    :ok =
-      Exqlite.Sqlite3.execute(
-        conn,
-        "INSERT OR REPLACE INTO schema_version (version) VALUES (#{version})"
-      )
+    {:ok, stmt} =
+      Exqlite.Sqlite3.prepare(conn, "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)")
+
+    :ok = Exqlite.Sqlite3.bind(stmt, [version])
+    :done = Exqlite.Sqlite3.step(conn, stmt)
+    Exqlite.Sqlite3.release(conn, stmt)
   end
 
   # v1: Original schema — solutions table + basic indexes

@@ -285,18 +285,19 @@ defmodule Pass.Store do
         "SELECT #{Enum.join(@columns, ", ")} FROM solutions WHERE #{Enum.join(where_clauses, " AND ")} ORDER BY trust_score DESC"
       end
 
-    {:ok, rows} = exec_select(conn, sql, params)
-    {:ok, Enum.map(rows, &row_to_solution/1)}
+    case exec_select(conn, sql, params) do
+      {:ok, rows} -> {:ok, Enum.map(rows, &row_to_solution/1)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp do_get(conn, id) do
     sql = "SELECT #{Enum.join(@columns, ", ")} FROM solutions WHERE id = ?1"
 
-    {:ok, rows} = exec_select(conn, sql, [id])
-
-    case rows do
-      [row | _] -> {:ok, row_to_solution(row)}
-      [] -> {:error, :not_found}
+    case exec_select(conn, sql, [id]) do
+      {:ok, [row | _]} -> {:ok, row_to_solution(row)}
+      {:ok, []} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -309,10 +310,11 @@ defmodule Pass.Store do
     total = exec_scalar(conn, "SELECT COUNT(*) FROM solutions", []) || 0
     avg_trust = exec_scalar(conn, "SELECT AVG(trust_score) FROM solutions", []) || 0.0
 
-    {:ok, lang_rows} =
-      exec_select(conn, "SELECT language, COUNT(*) FROM solutions GROUP BY language", [])
-
-    by_language = Map.new(lang_rows, fn [lang, count] -> {lang, count} end)
+    by_language =
+      case exec_select(conn, "SELECT language, COUNT(*) FROM solutions GROUP BY language", []) do
+        {:ok, rows} -> Map.new(rows, fn [lang, count] -> {lang, count} end)
+        {:error, _} -> %{}
+      end
 
     fingerprinted =
       exec_scalar(
@@ -325,7 +327,7 @@ defmodule Pass.Store do
      %{
        total: total,
        by_language: by_language,
-       avg_trust: avg_trust / 1,
+       avg_trust: avg_trust,
        fingerprinted: fingerprinted
      }}
   end
@@ -346,16 +348,20 @@ defmodule Pass.Store do
     sql =
       "SELECT #{Enum.join(@columns, ", ")} FROM solutions#{where_sql} ORDER BY trust_score DESC LIMIT ?#{idx}"
 
-    {:ok, rows} = exec_select(conn, sql, params ++ [limit])
+    case exec_select(conn, sql, params ++ [limit]) do
+      {:ok, rows} ->
+        results =
+          Enum.map(rows, fn row ->
+            solution = row_to_solution(row)
+            fp_map = row_to_fingerprint_map(row)
+            {solution, fp_map}
+          end)
 
-    results =
-      Enum.map(rows, fn row ->
-        solution = row_to_solution(row)
-        fp_map = row_to_fingerprint_map(row)
-        {solution, fp_map}
-      end)
+        {:ok, results}
 
-    {:ok, results}
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp build_search_where(fingerprint_map, min_trust) do
@@ -403,18 +409,33 @@ defmodule Pass.Store do
 
   defp do_fts_search(conn, query_text, opts) do
     limit = Keyword.get(opts, :limit, 20)
+    sanitized = sanitize_fts_query(query_text)
 
-    fts_sql = """
-    SELECT s.#{Enum.join(@columns, ", s.")}
-    FROM solutions_fts fts
-    JOIN solutions s ON s.rowid = fts.rowid
-    WHERE solutions_fts MATCH ?1
-    ORDER BY rank
-    LIMIT ?2
-    """
+    if sanitized == "" do
+      {:ok, []}
+    else
+      fts_sql = """
+      SELECT s.#{Enum.join(@columns, ", s.")}
+      FROM solutions_fts fts
+      JOIN solutions s ON s.rowid = fts.rowid
+      WHERE solutions_fts MATCH ?1
+      ORDER BY rank
+      LIMIT ?2
+      """
 
-    {:ok, rows} = exec_select(conn, fts_sql, [query_text, limit])
-    {:ok, Enum.map(rows, &row_to_solution/1)}
+      case exec_select(conn, fts_sql, [sanitized, limit]) do
+        {:ok, rows} -> {:ok, Enum.map(rows, &row_to_solution/1)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp sanitize_fts_query(text) do
+    text
+    |> String.replace(~r/["\*\-\(\)\:\^]/, " ")
+    |> String.replace(~r/\b(AND|OR|NOT|NEAR)\b/i, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
   end
 
   defp find_by_signature(conn, problem_signature) do
@@ -479,8 +500,11 @@ defmodule Pass.Store do
 
     try do
       :ok = Exqlite.Sqlite3.bind(stmt, params)
-      rows = collect_rows(conn, stmt, [])
-      {:ok, rows}
+
+      case collect_rows(conn, stmt, []) do
+        {:error, reason} -> {:error, reason}
+        rows -> {:ok, rows}
+      end
     after
       Exqlite.Sqlite3.release(conn, stmt)
     end
@@ -488,8 +512,9 @@ defmodule Pass.Store do
 
   defp collect_rows(conn, stmt, acc) do
     case Exqlite.Sqlite3.step(conn, stmt) do
-      {:row, row} -> collect_rows(conn, stmt, acc ++ [row])
-      :done -> acc
+      {:row, row} -> collect_rows(conn, stmt, [row | acc])
+      :done -> Enum.reverse(acc)
+      {:error, reason} -> {:error, reason}
     end
   end
 

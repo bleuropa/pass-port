@@ -59,7 +59,9 @@ defmodule Pass.Identity do
         secret_key: Base.encode64(secret_key)
       })
 
-    path |> Path.dirname() |> File.mkdir_p!()
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+    File.chmod(dir, 0o700)
 
     with :ok <- File.write(path, json) do
       File.chmod(path, 0o600)

@@ -7,7 +7,6 @@ defmodule Pass.Actions.GetStatus do
     name: "get_status",
     description: "Returns the current Pass agent status including identity and store stats",
     schema: [
-      identity_path: [type: :string, doc: "Path to identity file"],
       store: [type: :atom, doc: "Store GenServer name"]
     ]
 
@@ -24,16 +23,36 @@ defmodule Pass.Actions.GetStatus do
         {:error, _} -> nil
       end
 
-    {:ok, stats} = Pass.Store.stats(store)
+    stats =
+      try do
+        case Pass.Store.stats(store) do
+          {:ok, s} -> s
+          {:error, _} -> nil
+        end
+      catch
+        :exit, _ -> nil
+      end
 
-    {:ok,
-     %{
-       agent_id: agent_id,
-       identity_initialized: agent_id != nil,
-       contributions: stats.total,
-       by_language: stats.by_language,
-       avg_trust: stats.avg_trust,
-       network_status: :local
-     }}
+    if stats do
+      {:ok,
+       %{
+         agent_id: agent_id,
+         identity_initialized: agent_id != nil,
+         contributions: stats.total,
+         by_language: stats.by_language,
+         avg_trust: stats.avg_trust,
+         network_status: :local
+       }}
+    else
+      {:ok,
+       %{
+         agent_id: agent_id,
+         identity_initialized: agent_id != nil,
+         contributions: 0,
+         by_language: %{},
+         avg_trust: 0.0,
+         network_status: :local
+       }}
+    end
   end
 end

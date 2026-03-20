@@ -60,13 +60,25 @@ defmodule Pass.HTTP.Router do
     |> send_resp(status, Jason.encode!(body))
   end
 
+  @allowed_keys ~w(
+    problem_description solution_content language framework runtime tags
+    verification domain target ecosystem versions error_class constraints
+    goal symptoms problem min_trust min_score limit store
+  )a
+
   defp atomize_keys(map) when is_map(map) do
+    allowed_strings = Map.new(@allowed_keys, fn k -> {Atom.to_string(k), k} end)
+
     Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} -> {k, v}
+      {k, v} when is_binary(k) ->
+        case Map.fetch(allowed_strings, k) do
+          {:ok, atom_key} -> {atom_key, v}
+          :error -> {k, v}
+        end
+
+      {k, v} ->
+        {k, v}
     end)
-  rescue
-    ArgumentError -> map
   end
 
   defp serialize_result(%{matches: matches} = result) when is_list(matches) do

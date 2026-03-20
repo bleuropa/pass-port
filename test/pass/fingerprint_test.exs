@@ -168,8 +168,8 @@ defmodule Pass.FingerprintTest do
 
       assert is_binary(map["ecosystem"])
       assert {:ok, ["elixir", "phoenix"]} = Jason.decode(map["ecosystem"])
-      assert is_binary(map["versions"])
-      assert {:ok, %{"elixir" => "~> 1.18"}} = Jason.decode(map["versions"])
+      assert is_binary(map["version_constraints"])
+      assert {:ok, %{"elixir" => "~> 1.18"}} = Jason.decode(map["version_constraints"])
       assert is_binary(map["constraints"])
       assert is_binary(map["symptoms"])
       assert is_binary(map["terms"])

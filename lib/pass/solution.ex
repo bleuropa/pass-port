@@ -259,11 +259,14 @@ defmodule Pass.Solution do
   defp parse_sharing(_), do: :attributed
 
   defp parse_datetime!(str) when is_binary(str) do
-    {:ok, dt, _offset} = DateTime.from_iso8601(str)
-    dt
+    case DateTime.from_iso8601(str) do
+      {:ok, dt, _offset} -> dt
+      {:error, _} -> DateTime.utc_now()
+    end
   end
 
   defp parse_datetime!(%DateTime{} = dt), do: dt
+  defp parse_datetime!(nil), do: DateTime.utc_now()
 
   defp maybe_build_fingerprint(attrs) do
     has_fingerprint_fields =
